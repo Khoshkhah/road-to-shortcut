@@ -74,8 +74,9 @@ Parquet file with columns:
 - `cost`: Total travel cost
 - `cell`: H3 cell where shortcut is used (0x0 for global)
 - `inside`: Direction indicator:
-  - `+1`: Upward shortcut (to coarser cell)
-  - `0`: Lateral shortcut (same level)
-  - `-1`: Downward shortcut (to finer cell)
-  - `-2`: Edge shortcut (direct edge, used at global level)
+  - `+1`: Upward shortcut (from inside → outside, lca_in > lca_out)
+  - `0`: Lateral shortcut (same resolution level, lca_in == lca_out)
+  - `-1`: Downward shortcut (from outside → inside, lca_in < lca_out)
+  - `-2`: Outer-only shortcut (only valid for outer cell merges, lca_res > inner_res)
+
 
