@@ -72,5 +72,10 @@ Parquet file with columns:
 - `outgoing_edge`: Ending edge ID  
 - `via_edge`: Intermediate edge for path reconstruction
 - `cost`: Total travel cost
-- `cell`: H3 cell where shortcut is used
-- `inside`: Direction (+1=up, 0=lateral, -1=down)
+- `cell`: H3 cell where shortcut is used (0x0 for global)
+- `inside`: Direction indicator:
+  - `+1`: Upward shortcut (to coarser cell)
+  - `0`: Lateral shortcut (same level)
+  - `-1`: Downward shortcut (to finer cell)
+  - `-2`: Edge shortcut (direct edge, used at global level)
+
