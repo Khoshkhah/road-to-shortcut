@@ -29,8 +29,8 @@ CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
 DATA_DIR = PROJECT_ROOT / "data"
 
 # District name - change this to process different datasets
-DISTRICT_NAME = "Somerset"
-#DISTRICT_NAME = "Burnaby"
+#DISTRICT_NAME = "Somerset"
+DISTRICT_NAME = "Burnaby"
 #DISTRICT_NAME = "All_Vancouver"
 #DISTRICT_NAME = "Vancouver_City"
 

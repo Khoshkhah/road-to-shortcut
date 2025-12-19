@@ -66,6 +66,11 @@ def initialize_spark(app_name: str = "ShortcutsGeneration", driver_memory: str =
 def read_edges(spark: SparkSession, file_path: str) -> DataFrame:
     """Load edge data from CSV file."""
     edges_df = spark.read.csv(file_path, header=True, inferSchema=True)
+    
+    # Handle both 'id' and 'edge_index' column names
+    if "edge_index" in edges_df.columns and "id" not in edges_df.columns:
+        edges_df = edges_df.withColumnRenamed("edge_index", "id")
+        
     return edges_df.select("id", "from_cell", "to_cell", "lca_res")
 
 
@@ -99,7 +104,13 @@ def dummy_cost(length: float, maxspeed: float) -> float:
 
 def update_dummy_costs_for_edges(spark: SparkSession, file_path: str, edges_df: DataFrame) -> DataFrame:
     """Add cost column to edges DataFrame."""
-    edges_df_cost = spark.read.csv(file_path, header=True, inferSchema=True).select("id", "length", "maxspeed")
+    edges_df_cost = spark.read.csv(file_path, header=True, inferSchema=True)
+    
+    # Handle both 'id' and 'edge_index' column names
+    if "edge_index" in edges_df_cost.columns and "id" not in edges_df_cost.columns:
+        edges_df_cost = edges_df_cost.withColumnRenamed("edge_index", "id")
+        
+    edges_df_cost = edges_df_cost.select("id", "length", "maxspeed")
     edges_df_cost = edges_df_cost.withColumn("cost", dummy_cost(F.col("length"), F.col("maxspeed")))
     
     edges_result = edges_df.drop("cost") if "cost" in edges_df.columns else edges_df

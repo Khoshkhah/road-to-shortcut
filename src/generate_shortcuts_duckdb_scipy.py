@@ -137,23 +137,37 @@ def run_scipy_algorithm(con: duckdb.DuckDBPyConnection):
 
 def main():
     log_conf.setup_logging("generate_shortcuts_duckdb_scipy")
-    logger.info("Starting DuckDB + Scipy Shortcuts Generation")
+    log_conf.log_section(logger, "SHORTCUTS GENERATION - DUCKDB + SCIPY VERSION")
+    
+    config_info = {
+        "edges_file": str(config.EDGES_FILE),
+        "graph_file": str(config.GRAPH_FILE),
+        "output_file": str(config.SHORTCUTS_OUTPUT_FILE),
+        "district": config.DISTRICT_NAME
+    }
+    log_conf.log_dict(logger, config_info, "Configuration")
     
     con = utils.initialize_duckdb()
     
     # 1. Load Data
-    logger.info("Loading edges...")
+    logger.info("Loading edge data...")
     utils.read_edges(con, str(config.EDGES_FILE))
+    edges_count = con.sql("SELECT COUNT(*) FROM edges").fetchone()[0]
+    logger.info(f"✓ Loaded {edges_count} edges")
+
+    logger.info("Computing edge costs...")
     utils.create_edges_cost_table(con, str(config.EDGES_FILE))
+    logger.info("✓ Edge costs computed")
     
-    logger.info("Creating initial shortcuts...")
+    logger.info("Creating initial shortcuts table...")
     utils.initial_shortcuts_table(con, str(config.GRAPH_FILE))
+    shortcuts_count = con.sql("SELECT COUNT(*) FROM shortcuts").fetchone()[0]
+    logger.info(f"✓ Created {shortcuts_count} initial shortcuts")
     
+    resolution_results = []
+
     # 2. Forward Pass
-    start_res = 15
-    end_res = -1
-    
-    # We follow the same loop structure as hybrid
+    log_conf.log_section(logger, "PHASE 1: FORWARD PASS (15 → -1)")
     # Forward Pass: 15 down to -1 (inclusive)
     for res in range(15, -2, -1):
         logger.info(f"\n--- Resolution {res} ---")
@@ -190,27 +204,36 @@ def main():
         
         # D. Execute Scipy -> outputs into 'shortcuts_next' (recreated inside function from pandas)
         # Using a specialized version of query inside the function
-        logger.info("Fetching active shortcuts for Scipy...")
-        df = con.sql("SELECT * FROM shortcuts_processing").df()
+        logger.info(f"✓ {len(df)} active shortcuts at resolution {res}")
         
         results = []
         if not df.empty:
+            logger.info(f"Processing across {df['current_cell'].nunique()} partitions using Scipy...")
             for cell, group in df.groupby('current_cell'):
                 processed = process_partition_scipy(group)
                 if not processed.empty:
                     processed['current_cell'] = cell
                     results.append(processed)
         
+        new_count = 0
         if results:
             final_df = pd.concat(results)
             con.execute("CREATE OR REPLACE TABLE shortcuts_next AS SELECT * FROM final_df")
+            new_count = len(final_df)
+            logger.info(f"✓ Generated {new_count} shortcuts")
         else:
+            logger.info("No active shortcuts, skipping...")
             con.execute("CREATE OR REPLACE TABLE shortcuts_next AS SELECT * FROM shortcuts WHERE 1=0")
             
+        resolution_results.append({
+            "phase": "forward",
+            "resolution": res,
+            "active": len(df),
+            "generated": new_count
+        })
+
         # E. Merge
-        logger.info(f"Merging {con.sql('SELECT COUNT(*) FROM shortcuts_next').fetchone()[0]} new shortcuts...")
-        # Note: Algo produced shortcuts_next, so we are good.
-        
+        logger.info(f"Merging {new_count} new shortcuts...")
         utils.merge_shortcuts(con)
         con.execute("DROP TABLE shortcuts_active")
 
@@ -233,11 +256,11 @@ def main():
         con.execute("CREATE TABLE shortcuts_processing AS SELECT * FROM shortcuts_active WHERE current_cell IS NOT NULL")
         
         # D. Execute Scipy
-        logger.info("Fetching active shortcuts for Scipy (backward)...")
-        df = con.sql("SELECT * FROM shortcuts_processing").df()
+        logger.info(f"✓ {len(df)} active shortcuts at resolution {res}")
         
         results = []
         if not df.empty:
+            logger.info(f"Processing across {df['current_cell'].nunique()} partitions using Scipy...")
             for cell, group in df.groupby('current_cell'):
                 if cell is None:
                     continue
@@ -246,24 +269,48 @@ def main():
                     processed['current_cell'] = cell
                     results.append(processed)
         
+        new_count = 0
         if results:
             final_df = pd.concat(results)
             con.execute("CREATE OR REPLACE TABLE shortcuts_next AS SELECT * FROM final_df")
+            new_count = len(final_df)
+            logger.info(f"✓ Generated {new_count} shortcuts")
         else:
+            logger.info("No active shortcuts, skipping...")
             con.execute("CREATE OR REPLACE TABLE shortcuts_next AS SELECT * FROM shortcuts WHERE 1=0")
             
+        resolution_results.append({
+            "phase": "backward",
+            "resolution": res,
+            "active": len(df),
+            "generated": new_count
+        })
+
         # E. Merge
-        logger.info(f"Merging {con.sql('SELECT COUNT(*) FROM shortcuts_next').fetchone()[0]} new shortcuts...")
+        logger.info(f"Merging {new_count} new shortcuts...")
         utils.merge_shortcuts(con)
         con.execute("DROP TABLE shortcuts_active")
 
     # 3. Finalize
-    logger.info("\nFinalizing output...")
+    log_conf.log_section(logger, "SAVING OUTPUT")
+    
+    final_count = con.sql("SELECT COUNT(*) FROM shortcuts").fetchone()[0]
+    logger.info(f"Final shortcuts count: {final_count}")
+
+    logger.info("Adding final info (cell, inside)...")
     utils.add_final_info(con)
     
     output_path = str(config.SHORTCUTS_OUTPUT_FILE).replace("_shortcuts", "_duckdb_scipy")
     logger.info(f"Saving to {output_path}")
     utils.save_output(con, output_path)
+
+    # 4. Summary
+    log_conf.log_section(logger, "SUMMARY")
+    for r in resolution_results:
+        logger.info(f"  {r['phase']:8s} res={r['resolution']:2d}: {r['active']} active → {r['generated']} generated")
+    logger.info(f"\n✓ Total shortcuts: {final_count}")
+    
+    log_conf.log_section(logger, "COMPLETED")
     logger.info("Done.")
 
 if __name__ == "__main__":
