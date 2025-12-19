@@ -41,3 +41,21 @@ def setup_logging(name: str = None) -> logging.Logger:
     root_logger.addHandler(console_handler)
     
     return logging.getLogger(name)
+
+def log_section(logger: logging.Logger, title: str, width: int = 60):
+    """Log a section header with separators."""
+    separator = "=" * width
+    logger.info(separator)
+    logger.info(title)
+    logger.info(separator)
+
+def log_dict(logger: logging.Logger, data: dict, title: str = None):
+    """Log dictionary as formatted key-value pairs."""
+    if title:
+        logger.info(f"--- {title} ---")
+    if not data:
+        return
+    max_key_len = max(len(str(k)) for k in data.keys())
+    for key, value in data.items():
+        logger.info(f"{str(key).ljust(max_key_len)} : {value}")
+

@@ -31,15 +31,15 @@ DATA_DIR = PROJECT_ROOT / "data"
 # District name - change this to process different datasets
 DISTRICT_NAME = "Somerset"
 #DISTRICT_NAME = "Burnaby"
-#DISTRICT_NAME = "all_Vancouver"
-#DISTRICT_NAME = "Vancouver"
+#DISTRICT_NAME = "All_Vancouver"
+#DISTRICT_NAME = "Vancouver_City"
 
 
 # Edge data file - contains road network with H3 indices
-EDGES_FILE = Path("/home/kaveh/projects/osm-to-road/data/output/somerset/Somerset_driving_simplified_edges_with_h3.csv")
+EDGES_FILE = Path(f"/home/kaveh/projects/osm-to-road/data/output/{DISTRICT_NAME}/{DISTRICT_NAME}_driving_simplified_edges_with_h3.csv")
 
 # Edge graph file - defines edge connectivity
-GRAPH_FILE = Path("/home/kaveh/projects/osm-to-road/data/output/somerset/Somerset_driving_edge_graph.csv")
+GRAPH_FILE = Path(f"/home/kaveh/projects/osm-to-road/data/output/{DISTRICT_NAME}/{DISTRICT_NAME}_driving_edge_graph.csv")
 
 # Output directory
 OUTPUT_DIR = PROJECT_ROOT / "output"

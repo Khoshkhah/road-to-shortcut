@@ -65,7 +65,7 @@ def read_edges(con: duckdb.DuckDBPyConnection, file_path: str) -> None:
     """Load edges into 'edges' table."""
     con.execute(f"""
         CREATE OR REPLACE TABLE edges AS 
-        SELECT id, from_cell, to_cell, lca_res 
+        SELECT edge_index AS id, from_cell, to_cell, lca_res 
         FROM read_csv_auto('{file_path}')
     """)
 
@@ -74,7 +74,7 @@ def create_edges_cost_table(con: duckdb.DuckDBPyConnection, file_path: str) -> N
     con.execute(f"""
         CREATE OR REPLACE TABLE edges_cost AS 
         SELECT 
-            id,
+            edge_index AS id,
             CASE 
                 WHEN maxspeed <= 0 THEN 1e308 
                 ELSE length / maxspeed 

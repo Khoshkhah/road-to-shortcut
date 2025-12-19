@@ -16,6 +16,8 @@ def compute_shortest_paths_pure_duckdb(con: duckdb.DuckDBPyConnection, max_itera
     Input: 'shortcuts_active' table (subset of shortcuts valid for current cell).
     Output: 'shortcuts_next' table with all-pairs shortest paths.
     """
+    logger.info("Starting pure DuckDB shortest path computation")
+
     # 1. Initialize 'paths' with base shortcuts
     # We maintain (from_edge, to_edge) PK and minimize cost.
     con.execute("DROP TABLE IF EXISTS paths")
@@ -24,6 +26,12 @@ def compute_shortest_paths_pure_duckdb(con: duckdb.DuckDBPyConnection, max_itera
         SELECT from_edge, to_edge, cost, via_edge, current_cell 
         FROM shortcuts_active
     """)
+    
+    # Get initial stats
+    stats = con.sql("SELECT COUNT(*), SUM(cost) FROM paths").fetchone()
+    init_count = stats[0]
+    init_cost_sum = stats[1] if stats[1] is not None else 0.0
+    logger.info(f"Initial: {init_count} paths, CostSum: {init_cost_sum:.4f}")
     
     # 2. Iterative expansion
     i = 0
@@ -86,11 +94,12 @@ def compute_shortest_paths_pure_duckdb(con: duckdb.DuckDBPyConnection, max_itera
         row_count_after = stats[0]
         cost_sum_after = stats[1] if stats[1] is not None else 0.0 # Handle empty table case
         
-        logger.info(f"Iteration {i}: Rows {row_count_before} -> {row_count_after}, CostSum {cost_sum_before:.4f} -> {cost_sum_after:.4f}")
+        cost_diff = cost_sum_before - cost_sum_after
+        logger.info(f"Iteration {i}: Rows {row_count_before} -> {row_count_after}, CostSum {cost_sum_before:.4f} -> {cost_sum_after:.4f} (diff: {cost_diff:.4f})")
         
         # Stop if STABLE (no new rows AND no cost improvement)
         # Note: Cost sum decreases as we find shorter paths.
-        if row_count_after == row_count_before and abs(cost_sum_after - cost_sum_before) < 1e-6:
+        if row_count_after == row_count_before and abs(cost_diff) < 1e-6:
             logger.info("Converged.")
             break
             
@@ -101,24 +110,42 @@ def compute_shortest_paths_pure_duckdb(con: duckdb.DuckDBPyConnection, max_itera
 
 def main():
     log_conf.setup_logging("generate_shortcuts_duckdb_pure")
-    logger.info("Starting DuckDB Pure SQL Shortcuts Generation")
+    log_conf.log_section(logger, "SHORTCUTS GENERATION - PURE DUCKDB VERSION")
+    
+    config_info = {
+        "edges_file": str(config.EDGES_FILE),
+        "graph_file": str(config.GRAPH_FILE),
+        "output_file": str(config.SHORTCUTS_OUTPUT_FILE),
+        "district": config.DISTRICT_NAME
+    }
+    log_conf.log_dict(logger, config_info, "Configuration")
     
     con = utils.initialize_duckdb()
     
     # 1. Load Data
-    logger.info("Loading edges...")
+    logger.info("Loading edge data...")
     utils.read_edges(con, str(config.EDGES_FILE))
+    edges_count = con.sql("SELECT COUNT(*) FROM edges").fetchone()[0]
+    logger.info(f"✓ Loaded {edges_count} edges")
+
+    logger.info("Computing edge costs...")
     utils.create_edges_cost_table(con, str(config.EDGES_FILE))
+    logger.info("✓ Edge costs computed")
     
-    logger.info("Creating initial shortcuts...")
+    logger.info("Creating initial shortcuts table...")
     utils.initial_shortcuts_table(con, str(config.GRAPH_FILE))
+    shortcuts_count = con.sql("SELECT COUNT(*) FROM shortcuts").fetchone()[0]
+    logger.info(f"✓ Created {shortcuts_count} initial shortcuts")
     
+    resolution_results = []
+
     # 2. Forward Pass (15 → -1)
-    logger.info("\n=== PHASE 1: FORWARD PASS (15 → -1) ===")
+    log_conf.log_section(logger, "PHASE 1: FORWARD PASS (15 → -1)")
     for res in range(15, -2, -1):  # 15, 14, ..., 0, -1
-        logger.info(f"\n--- Resolution {res} ---")
+        logger.info(f"\nForward: Resolution {res}")
         
         # A. Assign Cells
+        logger.info(f"Assigning cells for resolution {res}...")
         utils.assign_cell_forward(con, res)
         con.execute("DROP TABLE IF EXISTS shortcuts_active")
         con.execute("ALTER TABLE shortcuts_next RENAME TO shortcuts_active")
@@ -128,26 +155,38 @@ def main():
         
         # C. Run Algorithm
         active_count = con.sql("SELECT COUNT(*) FROM shortcuts_active").fetchone()[0]
-        logger.info(f"Active shortcuts: {active_count}")
+        logger.info(f"✓ {active_count} active shortcuts at resolution {res}")
         
+        new_count = 0
         if active_count > 0:
             compute_shortest_paths_pure_duckdb(con)
+            new_count = con.sql("SELECT COUNT(*) FROM shortcuts_next").fetchone()[0]
+            logger.info(f"✓ Generated {new_count} shortcuts")
         else:
+            logger.info("No active shortcuts, skipping...")
             con.execute("CREATE OR REPLACE TABLE shortcuts_next AS SELECT * FROM shortcuts_active WHERE 1=0")
         
+        resolution_results.append({
+            "phase": "forward",
+            "resolution": res,
+            "active": active_count,
+            "generated": new_count
+        })
+
         # D. Merge
-        logger.info(f"Merging {con.sql('SELECT COUNT(*) FROM shortcuts_next').fetchone()[0]} new shortcuts...")
+        logger.info(f"Merging {new_count} new shortcuts...")
         utils.merge_shortcuts(con)
         
         # Cleanup
         con.execute("DROP TABLE IF EXISTS shortcuts_active")
 
     # 3. Backward Pass (0 → 15)
-    logger.info("\n=== PHASE 2: BACKWARD PASS (0 → 15) ===")
+    log_conf.log_section(logger, "PHASE 2: BACKWARD PASS (0 → 15)")
     for res in range(0, 16):  # 0, 1, ..., 15
-        logger.info(f"\n--- Backward Resolution {res} ---")
+        logger.info(f"\nBackward: Resolution {res}")
         
         # A. Assign Cells (backward)
+        logger.info(f"Assigning cells for resolution {res}...")
         utils.assign_cell_backward(con, res)
         con.execute("DROP TABLE IF EXISTS shortcuts_active")
         con.execute("ALTER TABLE shortcuts_next RENAME TO shortcuts_active")
@@ -157,27 +196,51 @@ def main():
         
         # C. Run Algorithm
         active_count = con.sql("SELECT COUNT(*) FROM shortcuts_active").fetchone()[0]
-        logger.info(f"Active shortcuts: {active_count}")
+        logger.info(f"✓ {active_count} active shortcuts at resolution {res}")
         
+        new_count = 0
         if active_count > 0:
             compute_shortest_paths_pure_duckdb(con)
+            new_count = con.sql("SELECT COUNT(*) FROM shortcuts_next").fetchone()[0]
+            logger.info(f"✓ Generated {new_count} shortcuts")
         else:
+            logger.info("No active shortcuts, skipping...")
             con.execute("CREATE OR REPLACE TABLE shortcuts_next AS SELECT * FROM shortcuts_active WHERE 1=0")
         
+        resolution_results.append({
+            "phase": "backward",
+            "resolution": res,
+            "active": active_count,
+            "generated": new_count
+        })
+
         # D. Merge
-        logger.info(f"Merging {con.sql('SELECT COUNT(*) FROM shortcuts_next').fetchone()[0]} new shortcuts...")
+        logger.info(f"Merging {new_count} new shortcuts...")
         utils.merge_shortcuts(con)
         
         # Cleanup
         con.execute("DROP TABLE IF EXISTS shortcuts_active")
 
     # 4. Finalize
-    logger.info("\nFinalizing output...")
+    log_conf.log_section(logger, "SAVING OUTPUT")
+    
+    final_count = con.sql("SELECT COUNT(*) FROM shortcuts").fetchone()[0]
+    logger.info(f"Final shortcuts count: {final_count}")
+
+    logger.info("Adding final info (cell, inside)...")
     utils.add_final_info(con)
     
     output_path = str(config.SHORTCUTS_OUTPUT_FILE).replace("_shortcuts", "_duckdb_pure")
     logger.info(f"Saving to {output_path}")
     utils.save_output(con, output_path)
+    
+    # Summary
+    log_conf.log_section(logger, "SUMMARY")
+    for r in resolution_results:
+        logger.info(f"  {r['phase']:8s} res={r['resolution']:2d}: {r['active']} active → {r['generated']} generated")
+    logger.info(f"\n✓ Total shortcuts: {final_count}")
+    
+    log_conf.log_section(logger, "COMPLETED")
     logger.info("Done.")
 
 if __name__ == "__main__":
