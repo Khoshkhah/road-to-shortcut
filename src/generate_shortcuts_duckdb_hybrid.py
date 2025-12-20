@@ -1,5 +1,6 @@
 
 import logging
+from pathlib import Path
 import pandas as pd
 import duckdb
 import config
@@ -26,7 +27,13 @@ def main():
     }
     log_conf.log_dict(logger, config_info, "Configuration")
     
-    con = utils.initialize_duckdb()
+    # Define unique database path if persistence is enabled
+    db_path = ":memory:"
+    if config.DUCKDB_PERSIST_DIR:
+        db_path = str(Path(config.DUCKDB_PERSIST_DIR) / "hybrid_working.db")
+        logger.info(f"Using file-backed DuckDB: {db_path}")
+
+    con = utils.initialize_duckdb(db_path)
     
     # 1. Load Data
     logger.info("Loading edge data...")
@@ -81,13 +88,13 @@ def main():
             if res in scipy_resolutions:
                 logger.info(">>> Using Scipy Algorithm")
                 con.execute("DROP TABLE IF EXISTS shortcuts_processing")
-                con.execute("CREATE TABLE shortcuts_processing AS SELECT * FROM shortcuts_active")
+                con.execute("CREATE TEMPORARY TABLE shortcuts_processing AS SELECT * FROM shortcuts_active")
                 
-                df = con.sql("SELECT * FROM shortcuts_processing").df()
+                df_active = con.sql("SELECT * FROM shortcuts_processing").df()
                 results = []
-                if not df.empty:
-                    logger.info(f"Processing across {df['current_cell'].nunique()} partitions using Scipy...")
-                    for cell, group in df.groupby('current_cell'):
+                if not df_active.empty:
+                    logger.info(f"Processing across {df_active['current_cell'].nunique()} partitions using Scipy...")
+                    for cell, group in df_active.groupby('current_cell'):
                         processed = algo_scipy.process_partition_scipy(group)
                         if not processed.empty:
                             processed['current_cell'] = cell
@@ -99,6 +106,7 @@ def main():
                     new_count = len(final_df)
                 else:
                     con.execute("CREATE OR REPLACE TABLE shortcuts_next AS SELECT * FROM shortcuts_active WHERE 1=0")
+                con.execute("DROP TABLE shortcuts_processing")
             else:
                 logger.info(">>> Using Pure DuckDB Algorithm")
                 algo_pure.compute_shortest_paths_pure_duckdb(con)
@@ -119,6 +127,7 @@ def main():
         # C. Merge
         logger.info(f"Merging {new_count} new shortcuts...")
         utils.merge_shortcuts(con)
+        utils.checkpoint(con)
         con.execute("DROP TABLE IF EXISTS shortcuts_active")
 
     log_conf.log_section(logger, "PHASE 2: BACKWARD PASS (0 → 15)")
@@ -143,13 +152,13 @@ def main():
             if res in scipy_resolutions:
                 logger.info(">>> Using Scipy Algorithm")
                 con.execute("DROP TABLE IF EXISTS shortcuts_processing")
-                con.execute("CREATE TABLE shortcuts_processing AS SELECT * FROM shortcuts_active")
+                con.execute("CREATE TEMPORARY TABLE shortcuts_processing AS SELECT * FROM shortcuts_active")
                 
-                df = con.sql("SELECT * FROM shortcuts_processing").df()
+                df_active = con.sql("SELECT * FROM shortcuts_processing").df()
                 results = []
-                if not df.empty:
-                    logger.info(f"Processing across {df['current_cell'].nunique()} partitions using Scipy...")
-                    for cell, group in df.groupby('current_cell'):
+                if not df_active.empty:
+                    logger.info(f"Processing across {df_active['current_cell'].nunique()} partitions using Scipy...")
+                    for cell, group in df_active.groupby('current_cell'):
                         processed = algo_scipy.process_partition_scipy(group)
                         if not processed.empty:
                             processed['current_cell'] = cell
@@ -160,6 +169,7 @@ def main():
                     new_count = len(final_df)
                 else:
                     con.execute("CREATE OR REPLACE TABLE shortcuts_next AS SELECT * FROM shortcuts_active WHERE 1=0")
+                con.execute("DROP TABLE shortcuts_processing")
             else:
                 logger.info(">>> Using Pure DuckDB Algorithm")
                 algo_pure.compute_shortest_paths_pure_duckdb(con)
@@ -179,6 +189,7 @@ def main():
 
         logger.info(f"Merging {new_count} new shortcuts...")
         utils.merge_shortcuts(con)
+        utils.checkpoint(con)
         con.execute("DROP TABLE IF EXISTS shortcuts_active")
 
     # 3. Finalize

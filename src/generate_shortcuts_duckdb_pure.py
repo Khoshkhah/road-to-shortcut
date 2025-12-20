@@ -1,5 +1,6 @@
 
 import logging
+from pathlib import Path
 import duckdb
 import config
 import utilities_duckdb as utils
@@ -17,9 +18,8 @@ def compute_shortest_paths_pure_duckdb(con: duckdb.DuckDBPyConnection, max_itera
     Output: 'shortcuts_next' table with all-pairs shortest paths.
     """
     logger.info("Starting pure DuckDB shortest path computation")
-
+    
     # 1. Initialize 'paths' with base shortcuts
-    # We maintain (from_edge, to_edge) PK and minimize cost.
     con.execute("DROP TABLE IF EXISTS paths")
     con.execute("""
         CREATE TABLE paths AS 
@@ -27,46 +27,31 @@ def compute_shortest_paths_pure_duckdb(con: duckdb.DuckDBPyConnection, max_itera
         FROM shortcuts_active
     """)
     
-    # Get initial stats
     stats = con.sql("SELECT COUNT(*), SUM(cost) FROM paths").fetchone()
-    init_count = stats[0]
-    init_cost_sum = stats[1] if stats[1] is not None else 0.0
-    logger.info(f"Initial: {init_count} paths, CostSum: {init_cost_sum:.4f}")
+    logger.info(f"Initial: {stats[0]} paths, CostSum: {stats[1] if stats[1] else 0.0:.4f}")
     
     # 2. Iterative expansion
     i = 0
     while i < max_iterations:
-        # Create indices to speed up join
-        con.execute("CREATE INDEX IF NOT EXISTS idx_paths_from ON paths(from_edge)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_paths_to ON paths(to_edge)")
-        
-        # Determine new candidates by extending current paths by ONE hop of ORIGINAL shortcuts
-        # (Or geometric expansion path+path? Spark code expands path+path)
-        
-        # Spark Logic: new = current JOIN current
-        # This is geometric expansion (1+1=2, 2+2=4...). Very fast convergence.
-        
         stats_before = con.sql("SELECT COUNT(*), SUM(cost) FROM paths").fetchone()
         row_count_before = stats_before[0]
         cost_sum_before = stats_before[1] if stats_before[1] is not None else 0.0
         
+        # Geometric expansion: paths JOIN paths
         con.execute("""
             CREATE OR REPLACE TABLE new_paths AS
             SELECT 
                 L.from_edge,
                 R.to_edge,
                 L.cost + R.cost AS cost,
-                L.to_edge AS via_edge, -- Via edge is the intermediate node (L.to_edge = R.from_edge)
+                L.to_edge AS via_edge,
                 L.current_cell
             FROM paths L
             JOIN paths R ON L.to_edge = R.from_edge AND L.current_cell = R.current_cell
-            WHERE L.from_edge != R.to_edge -- No loops
+            WHERE L.from_edge != R.to_edge
         """)
         
         # Merge new paths into existing paths, keeping MIN cost
-        # DuckDB doesn't support easy MERGE for this without unique constraint. 
-        # Easier to Union and Group By.
-        
         con.execute("""
             CREATE OR REPLACE TABLE combined_paths AS
             SELECT * FROM paths
@@ -89,17 +74,16 @@ def compute_shortest_paths_pure_duckdb(con: duckdb.DuckDBPyConnection, max_itera
         con.execute("DROP TABLE paths")
         con.execute("ALTER TABLE paths_reduced RENAME TO paths")
         
-        # Convergence check: Count AND Checksum (Sum of costs)
+        # Convergence check
         stats = con.sql("SELECT COUNT(*), SUM(cost) FROM paths").fetchone()
         row_count_after = stats[0]
-        cost_sum_after = stats[1] if stats[1] is not None else 0.0 # Handle empty table case
+        cost_sum_after = stats[1] if stats[1] is not None else 0.0
         
         cost_diff = cost_sum_before - cost_sum_after
         logger.info(f"Iteration {i}: Rows {row_count_before} -> {row_count_after}, CostSum {cost_sum_before:.4f} -> {cost_sum_after:.4f} (diff: {cost_diff:.4f})")
         
         # Stop if STABLE (no new rows AND no cost improvement)
-        # Note: Cost sum decreases as we find shorter paths.
-        if row_count_after == row_count_before and abs(cost_diff) < 1e-6:
+        if row_count_after == row_count_before and abs(cost_sum_after - cost_sum_before) < 1e-6:
             logger.info("Converged.")
             break
             
@@ -107,6 +91,7 @@ def compute_shortest_paths_pure_duckdb(con: duckdb.DuckDBPyConnection, max_itera
         
     con.execute("DROP TABLE IF EXISTS shortcuts_next")
     con.execute("ALTER TABLE paths RENAME TO shortcuts_next")
+
 
 def main():
     log_conf.setup_logging("generate_shortcuts_duckdb_pure")
@@ -120,7 +105,13 @@ def main():
     }
     log_conf.log_dict(logger, config_info, "Configuration")
     
-    con = utils.initialize_duckdb()
+    # Define unique database path if persistence is enabled
+    db_path = ":memory:"
+    if config.DUCKDB_PERSIST_DIR:
+        db_path = str(Path(config.DUCKDB_PERSIST_DIR) / "pure_working.db")
+        logger.info(f"Using file-backed DuckDB: {db_path}")
+        
+    con = utils.initialize_duckdb(db_path)
     
     # 1. Load Data
     logger.info("Loading edge data...")
@@ -176,6 +167,7 @@ def main():
         # D. Merge
         logger.info(f"Merging {new_count} new shortcuts...")
         utils.merge_shortcuts(con)
+        utils.checkpoint(con)
         
         # Cleanup
         con.execute("DROP TABLE IF EXISTS shortcuts_active")
@@ -217,6 +209,7 @@ def main():
         # D. Merge
         logger.info(f"Merging {new_count} new shortcuts...")
         utils.merge_shortcuts(con)
+        utils.checkpoint(con)
         
         # Cleanup
         con.execute("DROP TABLE IF EXISTS shortcuts_active")

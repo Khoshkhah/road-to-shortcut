@@ -1,5 +1,6 @@
 
 import logging
+from pathlib import Path
 import time
 import pandas as pd
 import numpy as np
@@ -147,7 +148,13 @@ def main():
     }
     log_conf.log_dict(logger, config_info, "Configuration")
     
-    con = utils.initialize_duckdb()
+    # Define unique database path if persistence is enabled
+    db_path = ":memory:"
+    if config.DUCKDB_PERSIST_DIR:
+        db_path = str(Path(config.DUCKDB_PERSIST_DIR) / "scipy_working.db")
+        logger.info(f"Using file-backed DuckDB: {db_path}")
+
+    con = utils.initialize_duckdb(db_path)
     
     # 1. Load Data
     logger.info("Loading edge data...")
@@ -198,12 +205,12 @@ def main():
         # 'run_scipy_algorithm' expects 'shortcuts' table with current_cell? 
         # No, let's make it accept table name or just use shortcuts_active
         
-        # Creating a temporary table for the function to consume
+        # C. Run Scipy on shortcuts_active
         con.execute("DROP TABLE IF EXISTS shortcuts_processing")
-        con.execute("CREATE TABLE shortcuts_processing AS SELECT * FROM shortcuts_active WHERE current_cell IS NOT NULL")
+        con.execute("CREATE TEMPORARY TABLE shortcuts_processing AS SELECT * FROM shortcuts_active WHERE current_cell IS NOT NULL")
         
-        # D. Execute Scipy -> outputs into 'shortcuts_next' (recreated inside function from pandas)
-        # Using a specialized version of query inside the function
+        df = con.sql("SELECT * FROM shortcuts_processing").df()
+        
         logger.info(f"✓ {len(df)} active shortcuts at resolution {res}")
         
         results = []
@@ -235,6 +242,7 @@ def main():
         # E. Merge
         logger.info(f"Merging {new_count} new shortcuts...")
         utils.merge_shortcuts(con)
+        utils.checkpoint(con)
         con.execute("DROP TABLE shortcuts_active")
 
     # ================================================================
@@ -253,8 +261,10 @@ def main():
         
         # C. Prepare for Scipy
         con.execute("DROP TABLE IF EXISTS shortcuts_processing")
-        con.execute("CREATE TABLE shortcuts_processing AS SELECT * FROM shortcuts_active WHERE current_cell IS NOT NULL")
+        con.execute("CREATE TEMPORARY TABLE shortcuts_processing AS SELECT * FROM shortcuts_active WHERE current_cell IS NOT NULL")
         
+        df = con.sql("SELECT * FROM shortcuts_processing").df()
+
         # D. Execute Scipy
         logger.info(f"✓ {len(df)} active shortcuts at resolution {res}")
         
@@ -289,6 +299,7 @@ def main():
         # E. Merge
         logger.info(f"Merging {new_count} new shortcuts...")
         utils.merge_shortcuts(con)
+        utils.checkpoint(con)
         con.execute("DROP TABLE shortcuts_active")
 
     # 3. Finalize

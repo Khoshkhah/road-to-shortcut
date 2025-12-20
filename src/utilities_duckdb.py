@@ -1,11 +1,25 @@
 
 import duckdb
 import h3
+from pathlib import Path
 import config
 
 def initialize_duckdb(db_path: str = ":memory:") -> duckdb.DuckDBPyConnection:
     """Initialize DuckDB connection and register UDFs."""
     con = duckdb.connect(db_path)
+    
+    # Enforce memory limit if configured
+    if config.DUCKDB_MEMORY_LIMIT:
+        con.execute(f"SET memory_limit='{config.DUCKDB_MEMORY_LIMIT}'")
+    
+    # Tuning for performance/memory
+    con.execute("SET preserve_insertion_order=false")
+    
+    # Set temp directory for spilling if persistence is enabled
+    if config.DUCKDB_PERSIST_DIR:
+        temp_dir = Path(config.DUCKDB_PERSIST_DIR) / "temp"
+        temp_dir.mkdir(exist_ok=True)
+        con.execute(f"SET temp_directory='{temp_dir}'")
     
     # Register H3 UDFs
     con.create_function("h3_lca", _find_lca_impl, ["BIGINT", "BIGINT"], "BIGINT")
@@ -227,18 +241,17 @@ def assign_cell_backward(con: duckdb.DuckDBPyConnection, current_res: int) -> No
 def merge_shortcuts(con: duckdb.DuckDBPyConnection) -> None:
     """
     Merge 'shortcuts_next' into 'shortcuts', keeping min cost.
-    Result is stored back in 'shortcuts'.
-    
-    MATCHES SPARK: Uses window function with ORDER BY (cost, via_edge) for tie-breaking.
+    Optimized for memory by using TEMPORARY tables.
     """
+    con.execute("DROP TABLE IF EXISTS shortcuts_merged")
     con.execute("""
-        CREATE OR REPLACE TABLE shortcuts_merged AS
+        CREATE TEMPORARY TABLE shortcuts_merged AS
         SELECT from_edge, to_edge, cost, via_edge FROM shortcuts
         UNION ALL
         SELECT from_edge, to_edge, cost, via_edge FROM shortcuts_next
     """)
     
-    # Use window function with ORDER BY (cost, via_edge) same as Spark
+    # Use window function with ORDER BY same as Spark
     con.execute("""
         CREATE OR REPLACE TABLE shortcuts AS
         SELECT from_edge, to_edge, cost, via_edge 
@@ -258,7 +271,7 @@ def merge_shortcuts(con: duckdb.DuckDBPyConnection) -> None:
     """)
     
     con.execute("DROP TABLE shortcuts_merged")
-    con.execute("DROP TABLE shortcuts_next")
+    con.execute("DROP TABLE IF EXISTS shortcuts_next")
 
 def add_final_info(con: duckdb.DuckDBPyConnection) -> None:
     """
@@ -295,6 +308,10 @@ def add_final_info(con: duckdb.DuckDBPyConnection) -> None:
     
     con.execute("CREATE OR REPLACE TABLE shortcuts AS SELECT * FROM shortcuts_final")
     con.execute("DROP TABLE shortcuts_final")
+
+def checkpoint(con: duckdb.DuckDBPyConnection) -> None:
+    """Flush WAL to database file."""
+    con.execute("CHECKPOINT")
 
 def save_output(con: duckdb.DuckDBPyConnection, output_path: str) -> None:
     """Save 'shortcuts' table to Parquet."""
