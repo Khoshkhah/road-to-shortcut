@@ -1,24 +1,20 @@
-# Shortcuts Generation
+# Shortcuts Generation (Spark)
 
-Hierarchical shortcut generation for road networks using H3, PySpark, DuckDB, and Scipy.
+Hierarchical shortcut generation for road networks using H3, PySpark, and Scipy.
 
 ## Overview
 
-This project generates precomputed all-pairs shortest path shortcuts for efficient road network routing. It implements 6 algorithm variants across two execution engines:
+This project generates precomputed all-pairs shortest path shortcuts for efficient road network routing using Apache Spark for distributed computation.
 
-- **PySpark**: Distributed computation (better for very large networks)
-- **DuckDB**: Single-node in-memory (faster for medium-sized networks)
+> **Note**: For DuckDB-based implementation, see the separate project: [road-to-shortcut-duckdb](../road-to-shortcut-duckdb)
 
-## Performance Comparison (Somerset Dataset: 5,900 edges → 378,141 shortcuts)
+## Performance (Somerset Dataset: 5,900 edges → 378,141 shortcuts)
 
-| Engine     | Algorithm | Running Time | Notes |
-|------------|-----------|--------------|-------|
-| **DuckDB** | Hybrid    | ~2 min       | Fastest overall |
-| **DuckDB** | Pure      | ~2.5 min     | SQL-only, no Python UDFs |
-| **DuckDB** | Scipy     | ~2.5 min     | Uses scipy.shortest_path per partition |
-| **Spark**  | Hybrid    | ~3 min       | Default for medium networks |
-| **Spark**  | Pure      | ~4.5 min     | SQL-only via Spark DataFrames |
-| **Spark**  | Scipy     | ~9.5 min     | Uses applyInPandas with scipy |
+| Algorithm | Running Time | Notes |
+|-----------|--------------|-------|
+| **Hybrid** | ~3 min | Recommended |
+| **Pure** | ~4.5 min | SQL-only via Spark DataFrames |
+| **Scipy** | ~9.5 min | Uses applyInPandas with scipy |
 
 All implementations produce **100% verified optimal shortest paths**.
 
@@ -38,16 +34,10 @@ See [docs/algorithm.md](docs/algorithm.md) for details.
 road-to-shortcut/
 ├── src/
 │   ├── config.py                          # Configuration
-│   ├── utilities.py                       # Core utilities (Spark)
-│   ├── utilities_duckdb.py                # Core utilities (DuckDB)
+│   ├── utilities.py                       # Core utilities
 │   ├── generate_shortcuts_spark_pure.py   # Spark Pure implementation
 │   ├── generate_shortcuts_spark_scipy.py  # Spark Scipy implementation
-│   ├── generate_shortcuts_spark_hybrid.py # Spark Hybrid implementation
-│   ├── generate_shortcuts_duckdb_pure.py  # DuckDB Pure implementation
-│   ├── generate_shortcuts_duckdb_scipy.py # DuckDB Scipy implementation
-│   ├── generate_shortcuts_duckdb_hybrid.py# DuckDB Hybrid implementation
-│   ├── compare_outputs.py                 # Compare two shortcut outputs
-│   └── verify_shortcuts.py                # Verify shortcuts are optimal
+│   └── generate_shortcuts_spark_hybrid.py # Spark Hybrid implementation
 ├── docs/
 │   ├── core_concepts.md                   # Edge, cell, shortcut definitions
 │   ├── data_structures.md                 # DataFrame schemas
@@ -73,19 +63,9 @@ vim src/config.py
 
 # Run generation (choose one)
 cd src
-python generate_shortcuts_duckdb_hybrid.py  # Fastest
-python generate_shortcuts_spark_pure.py     # Pure Spark
-python generate_shortcuts_spark_scipy.py    # Spark + Scipy
-```
-
-## Verification
-
-```bash
-# Verify shortcuts are optimal shortest paths
-python src/verify_shortcuts.py output/Somerset_duckdb_hybrid
-
-# Compare two implementations
-python src/compare_outputs.py --ref output/Somerset_spark --new output/Somerset_duckdb
+python generate_shortcuts_spark_hybrid.py  # Recommended
+python generate_shortcuts_spark_pure.py    # Pure Spark
+python generate_shortcuts_spark_scipy.py   # Spark + Scipy
 ```
 
 ## Key Concepts

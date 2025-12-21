@@ -23,15 +23,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
 CHECKPOINT_DIR.mkdir(exist_ok=True)
 
-# DuckDB configuration
-# Defaults to a local 'persist' directory to prevent memory issues.
-# Can be overridden by setting DUCKDB_PERSIST_DIR environment variable.
-DUCKDB_PERSIST_DIR = os.getenv("DUCKDB_PERSIST_DIR", str(PROJECT_ROOT / "persist"))
-DUCKDB_MEMORY_LIMIT = os.getenv("DUCKDB_MEMORY_LIMIT", "18GB")
-
-if DUCKDB_PERSIST_DIR:
-    Path(DUCKDB_PERSIST_DIR).mkdir(parents=True, exist_ok=True)
-
 # ============================================================================
 # FILE PATHS
 # ============================================================================
